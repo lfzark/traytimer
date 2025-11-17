@@ -90,54 +90,110 @@ class TrayTimer(QSystemTrayIcon):
         if not name: return
         self.event_name = name
 
-        # === 新增：支持结束时间输入 ===
-        text, ok = QInputDialog.getText(
-            None, "倒计时", 
-            "输入秒数、m:s 或 结束时间 HH:MM:SS（如 15:10:10）:",
-            text="60"
-        )
-        if not ok: return
+        # === 新增：模式选择对话框 ===
+        dialog = QDialog()
+        dialog.setWindowTitle("倒计时设置")
+        layout = QVBoxLayout()
 
+        # 模式选择
+        mode_combo = QComboBox()
+        mode_combo.addItems([
+            "秒数 (如 90)",
+            "分钟:秒 (如 1:30)",
+            "结束时间 HH:MM (如 20:00)",
+            "结束时间 HH:MM:SS (如 15:10:10)"
+        ])
+        layout.addWidget(QLabel("选择倒计时模式:"))
+        layout.addWidget(mode_combo)
+
+        # 输入框
+        input_edit = QLineEdit()
+        input_edit.setPlaceholderText("请输入对应格式的值")
+        layout.addWidget(QLabel("输入值:"))
+        layout.addWidget(input_edit)
+
+        # 按钮
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        dialog.setLayout(layout)
+
+        # 动态提示
+        def update_placeholder():
+            idx = mode_combo.currentIndex()
+            placeholders = [
+                "例如: 90",
+                "例如: 1:30",
+                "例如: 20:00",
+                "例如: 15:10:10"
+            ]
+            input_edit.setPlaceholderText(placeholders[idx])
+
+        mode_combo.currentIndexChanged.connect(update_placeholder)
+        update_placeholder()  # 初始
+
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        mode_idx = mode_combo.currentIndex()
+        text = input_edit.text().strip()
+        if not text:
+            self.showMessage("错误", "请输入值", QSystemTrayIcon.Critical, 2000)
+            return
+
+        now = datetime.now()
         try:
-            # 1. 尝试解析为结束时间 HH:MM:SS 或 MM:SS
-            parts = text.strip().split(':')
-            if len(parts) == 3:  # HH:MM:SS
-                h, m, s = map(int, parts)
-                target_time = datetime.now().replace(hour=h, minute=m, second=s, microsecond=0)
-            elif len(parts) == 2:  # MM:SS
-                m, s = map(int, parts)
-                target_time = datetime.now().replace(minute=m, second=s, microsecond=0)
-            else:
-                raise ValueError
-
-            # 若早于当前时间 → 视为明天
-            if target_time <= datetime.now():
-                target_time += timedelta(days=1)
-
-            self.target_sec = int((target_time - datetime.now()).total_seconds())
-            if self.target_sec <= 0:
-                raise ValueError
-
-            self.log("倒计时开始 (目标时间)", self.target_sec)
-            self.log(f"目标时间: {target_time.strftime('%H:%M:%S')}")
-        except:
-            # 2. 回退：秒数或 m:s
-            try:
-                if ':' in text.strip():
-                    m, s = map(int, text.strip().split(':'))
-                    sec = m * 60 + s
-                else:
-                    sec = int(text.strip())
+            if mode_idx == 0:  # 秒数
+                sec = int(text)
                 if sec <= 0: raise ValueError
                 self.target_sec = sec
-                self.log("倒计时开始", sec)
-            except:
-                self.showMessage("错误", "格式错误！\n支持：秒数、m:s、HH:MM:SS、MM:SS", QSystemTrayIcon.Critical, 3000)
-                return
+                self.log("倒计时开始 (秒数)", sec)
+
+            elif mode_idx == 1:  # m:s
+                if ':' not in text: raise ValueError
+                m, s = map(int, text.split(':'))
+                sec = m * 60 + s
+                if sec <= 0: raise ValueError
+                self.target_sec = sec
+                self.log("倒计时开始 (m:s)", sec)
+
+            elif mode_idx == 2:  # HH:MM
+                if ':' not in text: raise ValueError
+                h, m = map(int, text.split(':'))
+                if h > 23 or m > 59: raise ValueError
+                today = now.date()
+                target_time = datetime.combine(today, datetime.min.time())
+                target_time = target_time.replace(hour=h, minute=m, second=0)
+                if target_time <= now:
+                    target_time += timedelta(days=1)
+                self.target_sec = int((target_time - now).total_seconds())
+                self.log("倒计时开始 (HH:MM)", self.target_sec)
+                self.log(f"目标时间: {target_time.strftime('%H:%M:%S')}")
+
+            elif mode_idx == 3:  # HH:MM:SS
+                parts = list(map(int, text.split(':')))
+                if len(parts) != 3: raise ValueError
+                h, m, s = parts
+                if h > 23 or m > 59 or s > 59: raise ValueError
+                today = now.date()
+                target_time = datetime.combine(today, datetime.min.time())
+                target_time = target_time.replace(hour=h, minute=m, second=s)
+                if target_time <= now:
+                    target_time += timedelta(days=1)
+                self.target_sec = int((target_time - now).total_seconds())
+                self.log("倒计时开始 (HH:MM:SS)", self.target_sec)
+                self.log(f"目标时间: {target_time.strftime('%H:%M:%S')}")
+
+        except:
+            self.showMessage("错误", "输入格式错误，请检查！", QSystemTrayIcon.Critical, 3000)
+            return
 
         self.mode = "countdown"
         self.start_time = time.time()
         self.setToolTip(f"倒计时: {self.format(self.target_sec)}")
+
 
     def stop(self):
         if self.mode == "stop": return
